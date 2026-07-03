@@ -155,12 +155,12 @@
             background: transparent;
             border: none;
             box-shadow: none;
-            touch-action: none; /* Prevent scroll when dragging the 3D element */
-            cursor: grab;
+            touch-action: none;
+            cursor: default;
         }
 
-        .scene:active {
-            cursor: grabbing;
+        .scene:hover {
+            cursor: default;
         }
 
         /* Middleground: Window frame */
@@ -424,6 +424,48 @@
             transform: translateY(-1px);
         }
 
+        .default-tasks-panel {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 18px;
+            padding: 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+        }
+
+        .default-tasks-panel h3 {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--color-today);
+        }
+
+        .default-tasks-panel p {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        .default-tasks-input {
+            width: 100%;
+            min-height: 90px;
+            resize: vertical;
+            background: #050a14;
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            color: #fff;
+            padding: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .btn-save-defaults {
+            max-width: 240px;
+            align-self: flex-end;
+        }
+
         /* Empty State */
         .empty-text {
             color: var(--text-muted);
@@ -608,6 +650,12 @@
 
     <!-- Task Creator Form -->
     <div class="creator-area">
+        <div class="default-tasks-panel">
+            <h3>默认任务列表 / DEFAULT TASKS</h3>
+            <p>输入每行一条默认今日任务。若“今日任务”为空时，系统会自动填入这些默认任务。</p>
+            <textarea id="default-tasks-textarea" class="default-tasks-input" placeholder="例如：\n1 x HTML 开发 / 编制\n1 x 生成图片\n"></textarea>
+            <button type="button" class="btn-submit btn-save-defaults" onclick="saveDefaultTasks()">保存默认任务</button>
+        </div>
         <form class="creator-form" id="mission-form" onsubmit="addMission(event)">
             <input type="text" class="input-mission" id="mission-input" placeholder="部署新的指令/任务目标..." required autocomplete="off">
             <select class="select-type" id="mission-type">
@@ -642,8 +690,14 @@
         // Core Data State
         let state = {
             lastCheckDate: "",
-            missions: []
+            missions: [],
+            defaultTasks: []
         };
+
+        const INITIAL_DEFAULT_TASKS = [
+            "1 x HTML 开发 / 编制",
+            "1 x 生成图片"
+        ];
 
         // ----- 惩罚音效：播放本地 MP3 -----
         function playPunishmentSynth() {
@@ -687,6 +741,7 @@
             if (!storedState) {
                 state = {
                     lastCheckDate: todayStr,
+                    defaultTasks: [...INITIAL_DEFAULT_TASKS],
                     missions: [
                         { id: 1, text: "1 x HTML 开发 / 编制", type: "today", completed: false, failDate: null },
                         { id: 2, text: "1 x 生成图片", type: "today", completed: false, failDate: null },
@@ -694,15 +749,19 @@
                     ]
                 };
                 saveState();
-                renderUI();
             } else {
                 state = JSON.parse(storedState);
+                if (!Array.isArray(state.defaultTasks)) {
+                    state.defaultTasks = [...INITIAL_DEFAULT_TASKS];
+                }
                 if (state.lastCheckDate !== todayStr) {
                     processRollover(todayStr);
-                } else {
-                    renderUI();
                 }
             }
+
+            fillDefaultTasksIfEmpty();
+            renderDefaultTasks();
+            renderUI();
             initParallax();
         }
 
@@ -749,6 +808,50 @@
 
         function saveState() {
             localStorage.setItem("game_mission_board_state", JSON.stringify(state));
+        }
+
+        function renderDefaultTasks() {
+            const textarea = document.getElementById('default-tasks-textarea');
+            if (!textarea) return;
+            textarea.value = Array.isArray(state.defaultTasks) ? state.defaultTasks.join('\n') : '';
+        }
+
+        function saveDefaultTasks() {
+            const textarea = document.getElementById('default-tasks-textarea');
+            if (!textarea) return;
+
+            const tasks = textarea.value
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+
+            state.defaultTasks = tasks;
+            saveState();
+            fillDefaultTasksIfEmpty();
+            renderUI();
+        }
+
+        function fillDefaultTasksIfEmpty() {
+            const hasToday = state.missions.some(m => m.type === 'today');
+            if (hasToday) return;
+
+            const defaults = Array.isArray(state.defaultTasks)
+                ? state.defaultTasks.filter(text => text && text.trim().length > 0)
+                : [];
+
+            if (defaults.length === 0) return;
+
+            const baseId = Date.now();
+            const defaultEntries = defaults.map((text, index) => ({
+                id: baseId + index,
+                text,
+                type: 'today',
+                completed: false,
+                failDate: null
+            }));
+
+            state.missions = [...defaultEntries, ...state.missions];
+            saveState();
         }
 
         function dismissPunishmentModal() {
@@ -928,33 +1031,18 @@
                 backgroundLayer.style.transform = `translateZ(-300px) rotateX(${bgAngleX}deg) rotateY(${bgAngleY}deg)`;
             }
 
-            function handlePointerDown(e) {
-                if(e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
-                
-                isDragging = true;
+            function handleHoverMove(e) {
+                const rect = scene.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                startX = clientX;
-                startY = clientY;
-                
+                const deltaX = clientX - (rect.left + rect.width / 2);
+                const deltaY = clientY - (rect.top + rect.height / 2);
+
                 foreground.style.transition = 'none';
                 windowFrame.style.transition = 'none';
                 backgroundLayer.style.transition = 'none';
-            }
 
-            function handlePointerMove(e) {
-                if (!isDragging) return;
-                
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                const deltaX = clientX - startX;
-                const deltaY = clientY - startY;
-                
                 requestAnimationFrame(() => updateAngles(deltaX, deltaY));
-            }
-
-            function handlePointerUp() {
-                isDragging = false;
             }
 
             function resetParallax() {
@@ -966,13 +1054,9 @@
                 updateAngles(0, 0);
             }
 
-            scene.addEventListener('mousedown', handlePointerDown);
-            scene.addEventListener('touchstart', handlePointerDown, {passive: true});
-            document.addEventListener('mousemove', handlePointerMove);
-            document.addEventListener('touchmove', handlePointerMove, {passive: false});
-            document.addEventListener('mouseup', handlePointerUp);
-            document.addEventListener('touchend', handlePointerUp);
-            scene.addEventListener('dblclick', resetParallax);
+            scene.addEventListener('mousemove', handleHoverMove);
+            scene.addEventListener('touchmove', handleHoverMove, {passive: false});
+            scene.addEventListener('mouseleave', resetParallax);
         }
 
         window.onload = initDashboard;
